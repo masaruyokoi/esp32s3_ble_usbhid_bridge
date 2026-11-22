@@ -20,6 +20,7 @@
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "store/config/ble_store_config.h" // NVSへのペアリング鍵保存用
 
 static const char *TAG = "BLE_USB_HID";
 
@@ -237,7 +238,7 @@ static const struct ble_gatt_svc_def s_gatt_svr_svcs[] = {
                 .access_cb = gatt_chr_access_cb,
                 .arg = NULL,
                 .descriptors = NULL,
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
                 .min_key_size = 0,
                 .val_handle = NULL,
                 .cpfd = NULL,
@@ -264,6 +265,9 @@ static const struct ble_gatt_svc_def s_gatt_svr_svcs[] = {
 
 static int ble_gap_event_cb(struct ble_gap_event *event, void *arg) {
     (void)arg;
+    struct ble_gap_conn_desc desc;
+    int rc;
+
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
@@ -282,6 +286,25 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_ADV_COMPLETE:
             ble_app_advertise();
             break;
+
+	case BLE_GAP_EVENT_ENC_CHANGE:
+            ESP_LOGI(TAG, "Encryption change event; status=%d", event->enc_change.status);
+            rc = ble_gap_conn_find(event->enc_change.conn_handle, &desc);
+            if (rc == 0) {
+                ESP_LOGI(TAG, "Encrypted=%d, Bonded=%d, KeySize=%d",
+                         desc.sec_state.encrypted,
+                         desc.sec_state.bonded,
+                         desc.sec_state.key_size);
+            }
+            break;
+
+        // ★追加: PC側でペアリング解除後に再接続された場合、古いボンディング鍵を削除して再ペアリングを許可
+        case BLE_GAP_EVENT_REPEAT_PAIRING:
+            rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+            if (rc == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
 
         default:
             break;
@@ -348,9 +371,11 @@ static void nimble_host_task(void *param) {
     nimble_port_freertos_deinit();
 }
 
-/* =========================================================================
- * 4. メインエントリポイント
- * ========================================================================= */
+// declare the internal function
+void ble_store_config_init(void);
+
+/* main */
+
 void app_main(void) {
     /* NVS 初期化 (BLE PHY キャリブレーションデータ保存に必須) */
     esp_err_t ret = nvs_flash_init();
@@ -383,6 +408,16 @@ void app_main(void) {
     ESP_ERROR_CHECK(nimble_port_init());
 
     ble_hs_cfg.sync_cb = ble_app_on_sync;
+
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;   // ディスプレイ・入力キーなし (Just Works)
+    ble_hs_cfg.sm_bonding = 1;                    // ペアリング鍵の保存を有効化
+    ble_hs_cfg.sm_mitm = 0;                       // NoInputNoOutput のため MITM 保護はオフ
+    ble_hs_cfg.sm_sc = 1;                         // LE Secure Connections (ECDH暗号化) を有効化
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+
+    ble_store_config_init();
+
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
