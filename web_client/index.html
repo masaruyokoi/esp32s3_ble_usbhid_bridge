@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLE to USB HID Keyboard Bridge</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 540px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #f8fafc;
+      color: #1e293b;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    h1 { font-size: 1.25rem; margin-top: 0; }
+    .status {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .disconnected { background: #fee2e2; color: #991b1b; }
+    .connected { background: #dcfce7; color: #166534; }
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 1rem;
+      resize: vertical;
+    }
+    .options {
+      margin: 12px 0;
+      font-size: 0.9rem;
+      display: flex;
+      gap: 16px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    #btnConnect { background: #2563eb; color: white; }
+    #btnConnect:hover { background: #1d4ed8; }
+    #btnSend { background: #059669; color: white; flex: 1; }
+    #btnSend:disabled { background: #94a3b8; cursor: not-allowed; }
+    #log {
+      margin-top: 16px;
+      font-size: 0.85rem;
+      color: #475569;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>BLE ➔ USB HID キーボード中継</h1>
+    <div id="statusBadge" class="status disconnected">未接続</div>
+
+    <div>
+      <textarea id="inputText" rows="4" placeholder="送信するパスワードや文字列を入力..."></textarea>
+    </div>
+
+    <div class="options">
+      <label><input type="checkbox" id="chkEnter"> 末尾に Enter を追加</label>
+      <label><input type="checkbox" id="chkClear" checked> 送信後に自動クリア</label>
+    </div>
+
+    <div class="actions">
+      <button id="btnConnect">ESP32に接続</button>
+      <button id="btnSend" disabled>ターゲットPCへ送信</button>
+    </div>
+
+    <div id="log"></div>
+  </div>
+
+  <script>
+    const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
+    const CHAR_UUID    = '12345678-1234-5678-1234-56789abcdef1';
+
+    let bleDevice = null;
+    let hidCharacteristic = null;
+
+    const statusBadge = document.getElementById('statusBadge');
+    const btnConnect  = document.getElementById('btnConnect');
+    const btnSend     = document.getElementById('btnSend');
+    const inputText   = document.getElementById('inputText');
+    const chkEnter    = document.getElementById('chkEnter');
+    const chkClear    = document.getElementById('chkClear');
+    const logEl       = document.getElementById('log');
+
+    function log(msg) {
+      const now = new Date().toLocaleTimeString();
+      logEl.textContent = `[${now}] ${msg}\n` + logEl.textContent;
+    }
+
+    function updateUiState(connected) {
+      if (connected) {
+        statusBadge.textContent = `接続済み: ${bleDevice.name}`;
+        statusBadge.className = 'status connected';
+        btnConnect.textContent = '切断';
+        btnSend.disabled = false;
+      } else {
+        statusBadge.textContent = '未接続';
+        statusBadge.className = 'status disconnected';
+        btnConnect.textContent = 'ESP32に接続';
+        btnSend.disabled = true;
+        hidCharacteristic = null;
+      }
+    }
+
+    btnConnect.addEventListener('click', async () => {
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+        return;
+      }
+
+      try {
+        log('BLEデバイスを検索中...');
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [SERVICE_UUID] }]
+        });
+
+        bleDevice.addEventListener('gattserverdisconnected', () => {
+          log('BLE切断されました');
+          updateUiState(false);
+        });
+
+        const server = await bleDevice.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        hidCharacteristic = await service.getCharacteristic(CHAR_UUID);
+
+        updateUiState(true);
+        log('接続完了');
+      } catch (err) {
+        log(`接続エラー: ${err.message}`);
+      }
+    });
+
+    btnSend.addEventListener('click', async () => {
+      if (!hidCharacteristic) return;
+
+      let text = inputText.value;
+      if (chkEnter.checked) {
+        text += '\n';
+      }
+      if (!text) return;
+
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+
+      if (data.length > 256) {
+        log('エラー: 一度に送信できるのは256バイトまでです');
+        return;
+      }
+
+      try {
+        await hidCharacteristic.writeValueWithResponse(data);
+        log(`送信完了 (${data.length} bytes)`);
+        if (chkClear.checked) {
+          inputText.value = '';
+        }
+      } catch (err) {
+        log(`送信エラー: ${err.message}`);
+      }
+    });
+  </script>
+</body>
+</html>
