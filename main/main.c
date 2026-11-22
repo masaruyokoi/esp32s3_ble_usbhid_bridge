@@ -24,6 +24,10 @@
 
 static const char *TAG = "BLE_USB_HID";
 
+static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t s_log_chr_val_handle = 0;
+static bool s_notify_enabled = false;
+
 /* =========================================================================
  * 1. USB HID (TinyUSB) 設定とディスクリプタ
  * ========================================================================= */
@@ -136,6 +140,36 @@ typedef struct {
 
 static QueueHandle_t s_hid_queue = NULL;
 
+static void send_ble_warn_log(const char *fmt, ...) {
+    char buf[160];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    if (len <= 0) return;
+    if (len >= (int)sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
+
+    /* 1. 通常のシリアルログにも出力 */
+    ESP_LOGW(TAG, "%s", buf);
+
+    /* 2. BLE接続中かつクライアントがNotifyを購読していれば送信 */
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE && s_notify_enabled && s_log_chr_val_handle != 0) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, len);
+        if (om != NULL) {
+            int rc = ble_gatts_notify_custom(s_conn_handle, s_log_chr_val_handle, om);
+            if (rc != 0) {
+                ESP_LOGD(TAG, "Notify failed; rc=%d", rc);
+            }
+        }
+    }
+}
+
+/* 既存の ESP_LOGW(TAG, ...) を置き換えるマクロ */
+#define LOGW(fmt, ...) send_ble_warn_log(fmt, ##__VA_ARGS__)
+
 static void send_hid_key(uint8_t modifier, uint8_t keycode) {
     uint8_t keycodes[6] = {keycode, 0, 0, 0, 0, 0};
 
@@ -159,7 +193,7 @@ static void hid_typing_task(void *arg) {
     while (1) {
         if (xQueueReceive(s_hid_queue, &msg, portMAX_DELAY) == pdTRUE) {
             if (!tud_mounted()) {
-                ESP_LOGW(TAG, "USB HID not mounted. Dropping %d bytes.", (int)msg.len);
+                LOGW(TAG, "USB HID not mounted. Dropping %d bytes.", (int)msg.len);
                 continue;
             }
 
@@ -174,7 +208,7 @@ static void hid_typing_task(void *arg) {
                 } else if (ch == '\t') {
                     send_hid_key(0, HID_KEY_TAB);
                 } else {
-                    ESP_LOGW(TAG, "Unsupported char: 0x%02X", ch);
+                    LOGW(TAG, "Unsupported char: 0x%02X", ch);
                 }
             }
             ESP_LOGI(TAG, "Typing complete.");
@@ -185,15 +219,23 @@ static void hid_typing_task(void *arg) {
 /* =========================================================================
  * 3. BLE (NimBLE) GATT サービス & アドバタイズ設定
  * ========================================================================= */
-/* カスタムサービス UUID: 12345678-1234-5678-1234-56789abcdef0 */
+// Custom service UUID: D59069D4-4342-4370-8D94-B02BFDDC8687
+// D5 90 69 D4 43 42 43 70 8D 94 B0 2B FD DC 86 87
 static const ble_uuid128_t gatt_svr_svc_uuid =
-    BLE_UUID128_INIT(0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-                     0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+  BLE_UUID128_INIT(0x87, 0x86, 0xdc, 0xfd, 0x2b, 0xb0, 0x94, 0x8d,
+     		   0x70, 0x43, 0x42, 0x43, 0xd4, 0x69, 0x90, 0xd5);
 
-/* カスタムキャラクタリスティック UUID: 12345678-1234-5678-1234-56789abcdef1 */
+// Custom charcteristic UUID: B972991F-6941-4CD3-BD1C-AFF706EA4802
+// B9 72 99 1F 69 41 4C D3 BD 1C AF F7 06 EA 48 02
 static const ble_uuid128_t gatt_svr_chr_uuid =
-    BLE_UUID128_INIT(0xf1, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-                     0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+ BLE_UUID128_INIT(0x02, 0x48, 0xea, 0x06, 0xf7, 0xaf, 0x1c, 0xbd,
+     		  0xd3, 0x4c, 0x41, 0x69, 0x1f, 0x99, 0x72, 0xb9);
+
+// LOG UUID : F0CE0115-5267-4AB7-A502-A8679707AABA
+// F0 CE 01 15-52 67-4A B7-A5 02-A8 67 97 07 AA BA
+static const ble_uuid128_t gatt_svr_log_chr_uuid =
+ BLE_UUID128_INIT(0xba, 0xaa, 0x07, 0x97, 0x67, 0xa8, 0x02, 0xa5,
+     		  0xb7, 0x4a, 0x67, 0x52, 0x15, 0x01, 0xce, 0xf0);
 
 static uint8_t s_own_addr_type;
 static void ble_app_advertise(void);
@@ -205,7 +247,7 @@ static int gatt_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
         if (om_len == 0 || om_len > MAX_PAYLOAD_LEN) {
-            ESP_LOGW(TAG, "Invalid write length: %d", om_len);
+            LOGW(TAG, "Invalid write length: %d", om_len);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
 
@@ -226,6 +268,12 @@ static int gatt_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+static int gatt_log_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn_handle; (void)attr_handle; (void)ctxt; (void)arg;
+    return 0;
+}
+
 /* -Werror=missing-field-initializers 対応のため全フィールドを明示初期化 */
 static const struct ble_gatt_svc_def s_gatt_svr_svcs[] = {
     {
@@ -233,6 +281,7 @@ static const struct ble_gatt_svc_def s_gatt_svr_svcs[] = {
         .uuid = &gatt_svr_svc_uuid.u,
         .includes = NULL,
         .characteristics = (struct ble_gatt_chr_def[]) {
+	    // receive characters to send 
             {
                 .uuid = &gatt_svr_chr_uuid.u,
                 .access_cb = gatt_chr_access_cb,
@@ -241,6 +290,17 @@ static const struct ble_gatt_svc_def s_gatt_svr_svcs[] = {
                 .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
                 .min_key_size = 0,
                 .val_handle = NULL,
+                .cpfd = NULL,
+            },
+	    // Send log contents to the web ui
+	    {
+                .uuid = &gatt_svr_log_chr_uuid.u,
+                .access_cb = gatt_log_access_cb,
+                .arg = NULL,
+                .descriptors = NULL,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .min_key_size = 0,
+                .val_handle = &s_log_chr_val_handle,
                 .cpfd = NULL,
             },
             {
@@ -273,7 +333,7 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg) {
             if (event->connect.status == 0) {
                 ESP_LOGI(TAG, "BLE Connected (handle=%d)", event->connect.conn_handle);
             } else {
-                ESP_LOGW(TAG, "BLE Connect failed; status=%d", event->connect.status);
+                LOGW(TAG, "BLE Connect failed; status=%d", event->connect.status);
                 ble_app_advertise();
             }
             break;
@@ -281,6 +341,13 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "BLE Disconnected; reason=%d", event->disconnect.reason);
             ble_app_advertise();
+            break;
+
+	case BLE_GAP_EVENT_SUBSCRIBE:
+            if (event->subscribe.attr_handle == s_log_chr_val_handle) {
+                s_notify_enabled = (event->subscribe.cur_notify != 0);
+                ESP_LOGI(TAG, "Log Notify subscription changed: %d", s_notify_enabled);
+            }
             break;
 
         case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -362,6 +429,16 @@ static void ble_app_on_sync(void) {
         ESP_LOGE(TAG, "Infer addr type failed; rc=%d", rc);
         return;
     }
+
+    uint8_t addr_val[6] = {0};
+    rc = ble_hs_id_copy_addr(s_own_addr_type, addr_val, NULL);
+    if (rc == 0) {
+        char dev_name[32];
+        /* by little endian, last octed bring to the first */
+        snprintf(dev_name, sizeof(dev_name), "ESP32-HID-%02X%02X%02X",
+                 addr_val[2], addr_val[1], addr_val[0]);
+        ble_svc_gap_device_name_set(dev_name);
+    }
     ble_app_advertise();
 }
 
@@ -421,7 +498,7 @@ void app_main(void) {
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    ESP_ERROR_CHECK(ble_svc_gap_device_name_set("ESP32-HID-Bridge"));
+    // ESP_ERROR_CHECK(ble_svc_gap_device_name_set("ESP32-HID-Bridge"));
     ESP_ERROR_CHECK(ble_gatts_count_cfg(s_gatt_svr_svcs));
     ESP_ERROR_CHECK(ble_gatts_add_svcs(s_gatt_svr_svcs));
 

@@ -94,8 +94,9 @@
   </div>
 
   <script>
-    const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
-    const CHAR_UUID    = '12345678-1234-5678-1234-56789abcdef1';
+    const SERVICE_UUID = 'd59069d4-4342-4370-8d94-b02bfddc8687';
+    const CHAR_UUID    = 'b972991f-6941-4cd3-bd1c-aff706ea4802';
+    const LOG_CHAR_UUID = 'f0ce0115-5267-4ab7-a502-a8679707aaba';
 
     let bleDevice = null;
     let hidCharacteristic = null;
@@ -128,6 +129,17 @@
       }
     }
 
+    function log(msg, isWarn = false) {
+      const now = new Date().toLocaleTimeString();
+      const line = document.createElement('div');
+      line.textContent = `[${now}] ${msg}`;
+      if (isWarn) {
+        line.style.color = '#d97706';
+        line.style.fontWeight = '600';
+      }
+      logEl.prepend(line);
+    }
+
     btnConnect.addEventListener('click', async () => {
       if (bleDevice && bleDevice.gatt.connected) {
         bleDevice.gatt.disconnect();
@@ -148,6 +160,14 @@
         const server = await bleDevice.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
         hidCharacteristic = await service.getCharacteristic(CHAR_UUID);
+
+        logCharacteristic = await service.getCharacteristic(LOG_CHAR_UUID);
+        await logCharacteristic.startNotifications();
+        logCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+          const decoder = new TextDecoder('utf-8');
+          const warnMsg = decoder.decode(event.target.value);
+          log(`⚠️ [ESP32警告] ${warnMsg}`, true);
+        });
 
         updateUiState(true);
         log('接続完了');
