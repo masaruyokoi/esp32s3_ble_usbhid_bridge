@@ -39,7 +39,10 @@
       font-family: monospace;
       font-size: 1rem;
       resize: vertical;
+      -webkit-text-security: disc;
     }
+    textarea.revealed { -webkit-text-security: none; }
+    #characterCount { font-size: 0.85rem; color: #475569; }
     .options {
       margin: 12px 0;
       font-size: 0.9rem;
@@ -63,6 +66,7 @@
     #btnConnect:hover { background: #1d4ed8; }
     #btnSend { background: #059669; color: white; flex: 1; }
     #btnSend:disabled { background: #94a3b8; cursor: not-allowed; }
+    #btnToggleText { background: #e2e8f0; color: #1e293b; }
     #log {
       margin-top: 16px;
       font-size: 0.85rem;
@@ -73,22 +77,26 @@
 </head>
 <body>
   <div class="card">
-    <h1>BLE ➔ USB HID キーボード中継</h1>
-    <div id="statusBadge" class="status disconnected">未接続</div>
+    <h1>BLE ➔ USB HID Keyboard Bridge</h1>
+    <div id="statusBadge" class="status disconnected">Disconnected</div>
+    <div class="actions">
+      <button id="btnConnect">Connect to ESP32</button>
+    </div>
 
     <div>
-      <textarea id="inputText" rows="4" placeholder="送信するパスワードや文字列を入力..."></textarea>
+      <textarea id="inputText" rows="4" placeholder="Input text to send... (up to 256 bytes)" aria-describedby="characterCount"></textarea>
+      <div id="characterCount">0 characters</div>
+    </div>
+    <div class="actions">
+      <button id="btnToggleText" type="button" aria-controls="inputText">Show text</button>
+      <button id="btnSend" disabled>Send to Target PC</button>
     </div>
 
     <div class="options">
-      <label><input type="checkbox" id="chkEnter"> 末尾に Enter を追加</label>
-      <label><input type="checkbox" id="chkClear" checked> 送信後に自動クリア</label>
+      <label><input type="checkbox" id="chkEnter"> Add [↵](Enter) key at the end</label>
+      <label><input type="checkbox" id="chkClear" checked> Auto-clear after sending</label>
     </div>
 
-    <div class="actions">
-      <button id="btnConnect">ESP32に接続</button>
-      <button id="btnSend" disabled>ターゲットPCへ送信</button>
-    </div>
 
     <div id="log"></div>
   </div>
@@ -104,10 +112,26 @@
     const statusBadge = document.getElementById('statusBadge');
     const btnConnect  = document.getElementById('btnConnect');
     const btnSend     = document.getElementById('btnSend');
+    const btnToggleText = document.getElementById('btnToggleText');
     const inputText   = document.getElementById('inputText');
+    const characterCount = document.getElementById('characterCount');
     const chkEnter    = document.getElementById('chkEnter');
     const chkClear    = document.getElementById('chkClear');
     const logEl       = document.getElementById('log');
+
+    const characterSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    function updateCharacterCount() {
+      const count = Array.from(characterSegmenter.segment(inputText.value)).length;
+      characterCount.textContent = `${count} ${count === 1 ? 'character' : 'characters'}`;
+    }
+
+    inputText.addEventListener('input', updateCharacterCount);
+    updateCharacterCount();
+
+    btnToggleText.addEventListener('click', () => {
+      const revealed = inputText.classList.toggle('revealed');
+      btnToggleText.textContent = revealed ? 'Hide text' : 'Show text';
+    });
 
     function log(msg) {
       const now = new Date().toLocaleTimeString();
@@ -118,12 +142,12 @@
       if (connected) {
         statusBadge.textContent = `接続済み: ${bleDevice.name}`;
         statusBadge.className = 'status connected';
-        btnConnect.textContent = '切断';
+        btnConnect.textContent = 'Disconnect';
         btnSend.disabled = false;
       } else {
-        statusBadge.textContent = '未接続';
+        statusBadge.textContent = 'not connected';
         statusBadge.className = 'status disconnected';
-        btnConnect.textContent = 'ESP32に接続';
+        btnConnect.textContent = 'Connect to ESP32';
         btnSend.disabled = true;
         hidCharacteristic = null;
       }
@@ -147,13 +171,13 @@
       }
 
       try {
-        log('BLEデバイスを検索中...');
+        log('Searching for BLE device...');
         bleDevice = await navigator.bluetooth.requestDevice({
           filters: [{ services: [SERVICE_UUID] }]
         });
 
         bleDevice.addEventListener('gattserverdisconnected', () => {
-          log('BLE切断されました');
+          log('BLE disconnected');
           updateUiState(false);
         });
 
@@ -166,13 +190,13 @@
         logCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
           const decoder = new TextDecoder('utf-8');
           const warnMsg = decoder.decode(event.target.value);
-          log(`⚠️ [ESP32警告] ${warnMsg}`, true);
+          log(`⚠️ [ESP32 Warning] ${warnMsg}`, true);
         });
 
         updateUiState(true);
-        log('接続完了');
+        log('Connected');
       } catch (err) {
-        log(`接続エラー: ${err.message}`);
+        log(`Connection error: ${err.message}`);
       }
     });
 
@@ -189,18 +213,19 @@
       const data = encoder.encode(text);
 
       if (data.length > 256) {
-        log('エラー: 一度に送信できるのは256バイトまでです');
+        log('Error: You can only send up to 256 bytes at a time');
         return;
       }
 
       try {
         await hidCharacteristic.writeValueWithResponse(data);
-        log(`送信完了 (${data.length} bytes)`);
+        log(`Transmitted (${data.length} bytes)`);
         if (chkClear.checked) {
           inputText.value = '';
+          updateCharacterCount();
         }
       } catch (err) {
-        log(`送信エラー: ${err.message}`);
+        log(`Transmission error: ${err.message}`);
       }
     });
   </script>
