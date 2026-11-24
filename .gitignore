@@ -1,0 +1,6 @@
+sdkconfig
+.DS_Store
+.git
+managed_components
+dependencies.lock
+sdkconfig
