@@ -22,6 +22,11 @@
 - ESP-IDF を利用
 - C言語で実装
 
+## VS Code の IntelliSense
+C/C++ 拡張機能は `build/compile_commands.json` を参照する設定になっています。
+ESP-IDF の環境を有効にして `idf.py build` を実行すると、このファイルが生成されます。
+ビルドディレクトリを変更した場合は、VS Code の `C_Cpp.default.compileCommands` も変更してください。
+
 ## 各パートでの要件
 - 入力元PCからESP32-S3 へのBluetooth通信には BLEペアリングを利用して暗号化する
 - デバイスの機体を識別できるようにするために、Bluetoothデバイス名にMACアドレスを含める。
