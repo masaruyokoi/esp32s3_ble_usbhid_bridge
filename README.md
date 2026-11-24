@@ -41,6 +41,7 @@ First, set up the ESP-IDF development environment. See the [ESP-IDF IDE setup in
 After setup, use the following commands to build the firmware and flash it to the bridge device:
 
 ```
+idf.py set-target esp32s3
 idf.py build
 idf.py flash
 ```
