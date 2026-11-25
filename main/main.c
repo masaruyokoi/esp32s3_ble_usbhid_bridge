@@ -1,3 +1,13 @@
+/**
+ * BLE-USB HID Bridge
+ * Copyright 2026 Masaru YOKOI (@masaruyokoi)
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * This firmware bridges BLE HID devices to USB HID.
+ * 
+ * This firmware allows a BLE HID device to communicate with a USB host as a standard USB HID device.
+ * ESP32-S3 is supported.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,14 +75,14 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
 }
 
 /* =========================================================================
- * 2. ASCII -> US配列 HIDキーコード変換テーブル & タイピング処理
+ * 2. ASCII -> US key layout mapping & typing process
  * ========================================================================= */
 typedef struct {
     uint8_t modifier;
     uint8_t keycode;
 } hid_key_map_t;
 
-/* ASCII 0x20 (' ') から 0x7E ('~') までのマッピング (US配列) */
+/* Mapping from ASCII 0x20 (' ') to 0x7E ('~') (US layout) */
 static const hid_key_map_t s_ascii_to_hid[95] = {
     {0, HID_KEY_SPACE},                        // 0x20 ' '
     {KEYBOARD_MODIFIER_LEFTSHIFT, HID_KEY_1},  // 0x21 '!'
@@ -217,7 +227,7 @@ static void hid_typing_task(void *arg) {
 }
 
 /* =========================================================================
- * 3. BLE (NimBLE) GATT サービス & アドバタイズ設定
+ * 3. BLE (NimBLE) GATT Service & Advertising Settings
  * ========================================================================= */
 // Custom service UUID: D59069D4-4342-4370-8D94-B02BFDDC8687
 // D5 90 69 D4 43 42 43 70 8D 94 B0 2B FD DC 86 87
@@ -486,10 +496,10 @@ void app_main(void) {
 
     ble_hs_cfg.sync_cb = ble_app_on_sync;
 
-    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;   // ディスプレイ・入力キーなし (Just Works)
-    ble_hs_cfg.sm_bonding = 1;                    // ペアリング鍵の保存を有効化
-    ble_hs_cfg.sm_mitm = 0;                       // NoInputNoOutput のため MITM 保護はオフ
-    ble_hs_cfg.sm_sc = 1;                         // LE Secure Connections (ECDH暗号化) を有効化
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;   // No display and no input key (Just Works)
+    ble_hs_cfg.sm_bonding = 1;                    // Enable saving of pairing keys
+    ble_hs_cfg.sm_mitm = 0;                       // MITM protection off due to NoInputNoOutput
+    ble_hs_cfg.sm_sc = 1;                         // Enable LE Secure Connections (ECDH encryption)
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
