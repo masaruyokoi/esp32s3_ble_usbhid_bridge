@@ -99,6 +99,32 @@
 
 
     <div id="log"></div>
+    <div id="description">
+      <p>Description: This web page allows you to connect to the ESP32 via BLE and send text to a USB HID keyboard.</p>
+      <p>Usage:</p>
+      <ol>
+        <li>Connect the USB OTG connector of the USB HID bridge to the target PC.</li>
+        <li>Click "Connect to ESP32" to establish a BLE connection with the USB HID bridge device you just connected to the target PC. Device name will be in the format "ESP32-HID-XXX".</li>
+        <li>Enter the text you want to send to the target PC in the textarea.</li>
+        <li>Optionally, check &quot;Add [↵](Enter) key at the end&quot; to append an Enter key after the text.</li>
+        <li>Optionally, check &quot;Auto-clear after sending&quot; to clear the textarea after sending.</li>
+        <li>Click "Send to Target PC" to transmit the text via the ESP32 to the USB HID keyboard.</li>
+      </ol>
+      <p>Preparation:</p>
+      <ul>
+        <li>Purchase an ESP32-S3 device</li>
+        <li>Install the flash tool for programming the ESP32-S3 device. </li>
+        <li>Download the firmware sourcecode for the BLE HID bridge device from https://github.com/masaruyokoi/esp32s3_ble_usbhid_bridge .</li>
+        <li>Build the source code and burn the firmware onto the ESP32-S3 device using the `idf.py flash` command.</li>
+      </ul>
+      <p>Troubleshooting:</p>
+      <ul>
+        <li>Ensure the ESP32 device is powered on and advertising via BLE before attempting to connect.</li>
+        <li>Make sure the USB HID bridge is properly connected to the target PC.</li>
+        <li>If the connection fails, try refreshing the web page and reconnecting.</li>
+        <li>If you flash the firmware onto the ESP32-S3 device, please operate "forget device" on your PC to remove the previous BLE pairing information. (when flashing new firmware, previous encryption keys is forgotten)</li>
+      </ul>
+    </div>
   </div>
 
   <script>
@@ -140,12 +166,12 @@
 
     function updateUiState(connected) {
       if (connected) {
-        statusBadge.textContent = `接続済み: ${bleDevice.name}`;
+        statusBadge.textContent = `Connected to ${bleDevice.name}`;
         statusBadge.className = 'status connected';
         btnConnect.textContent = 'Disconnect';
         btnSend.disabled = false;
       } else {
-        statusBadge.textContent = 'not connected';
+        statusBadge.textContent = 'Not connected';
         statusBadge.className = 'status disconnected';
         btnConnect.textContent = 'Connect to ESP32';
         btnSend.disabled = true;
